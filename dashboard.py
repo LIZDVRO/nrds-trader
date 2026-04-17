@@ -17,11 +17,11 @@ from streamlit_autorefresh import st_autorefresh
 # ==========================================
 # 1. SETUP & KEYS (From Streamlit Secrets Vault)
 # ==========================================
-ALPACA_API_KEY = st.secrets["PK76I5OBEQ7J4MWZBH4O35QIXQ"]
-ALPACA_SECRET_KEY = st.secrets["BCzKQgatG6eGznUaUEzBcLsCY3LzNJaq1skikmwsHubz"]
-SENDER_EMAIL = st.secrets["trading.app.cg@gmail.com"]  # The Gmail sending the alert
-SENDER_PASSWORD = st.secrets["fdbi bmuv tahz Ipqt"] # The App Password from Google
-CELL_PHONE_EMAIL = st.secrets["5595485468@tmomail.net"] # Your phone number @ your carrier's gateway
+ALPACA_API_KEY = st.secrets["ALPACA_API_KEY"]
+ALPACA_SECRET_KEY = st.secrets["ALPACA_SECRET_KEY"]
+SENDER_EMAIL = st.secrets["SENDER_EMAIL"]
+SENDER_PASSWORD = st.secrets["SENDER_PASSWORD"]
+CELL_PHONE_EMAIL = st.secrets["CELL_PHONE_EMAIL"]
 
 # Initialize BOTH Alpaca Clients (same keys, two purposes)
 alpaca_data = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
