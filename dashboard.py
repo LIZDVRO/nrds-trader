@@ -14,8 +14,8 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 # --- 1. PAGE SETUP & AUTOREFRESH ---
-st.set_page_config(page_title="NRDS Mean Reversion Bot", layout="wide")
-st.title("NRDS $300 Challenge Dashboard 📈")
+st.set_page_config(page_title="NRDS Trading Bot", layout="wide")
+st.title("NRDS Trading Bot 📈")
 
 # Auto-refresh every 30 seconds
 count = st_autorefresh(interval=30000, limit=None, key="data_refresh")
