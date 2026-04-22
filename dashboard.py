@@ -20,12 +20,20 @@ st.title("NRDS $300 Challenge Dashboard 📈")
 # Auto-refresh every 30 seconds
 count = st_autorefresh(interval=30000, limit=None, key="data_refresh")
 
-# --- 2. API KEYS & CLIENTS ---
+# --- 2. API KEYS, MODE & CLIENTS ---
 API_KEY = st.secrets["ALPACA_API_KEY"]
 SECRET_KEY = st.secrets["ALPACA_SECRET_KEY"]
+PAPER_MODE = st.secrets.get("PAPER_MODE", "true").lower() == "true"
+SEED_CAPITAL = float(st.secrets.get("SEED_CAPITAL", "300"))
 
-trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
+trading_client = TradingClient(API_KEY, SECRET_KEY, paper=PAPER_MODE)
 data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
+
+# Mode indicator banner
+if PAPER_MODE:
+    st.success("📝 **PAPER TRADING MODE** - Simulated trades, no real money at risk.")
+else:
+    st.error("🔴 **LIVE TRADING MODE** - Real money. Real consequences.")
 
 # --- 3. FETCH DATA (Alpaca IEX 1-Min Data) ---
 EST = pytz.timezone('America/New_York')
@@ -66,7 +74,7 @@ rsi_val = latest['RSI_6']
 lower_bb = latest[lower_bb_col]
 upper_bb = latest[upper_bb_col]
 
-# --- 5. $300 CHALLENGE PERSISTENT LEDGER ---
+# --- 5. CHALLENGE PERSISTENT LEDGER ---
 orders_req = GetOrdersRequest(
     status=QueryOrderStatus.CLOSED,
     symbols=["NRDS"],
@@ -89,9 +97,9 @@ ledger_df = pd.DataFrame(trade_data)
 if not ledger_df.empty:
     ledger_df = ledger_df.sort_values("Time").reset_index(drop=True)
 
-# Calculate Equity Curve compounding from $300
-current_challenge_equity = 300.00
-equity_curve = [{"Time": start_time.strftime("%Y-%m-%d %H:%M:%S"), "Equity": 300.00}]
+# Calculate Equity Curve compounding from seed capital
+current_challenge_equity = SEED_CAPITAL
+equity_curve = [{"Time": start_time.strftime("%Y-%m-%d %H:%M:%S"), "Equity": SEED_CAPITAL}]
 
 if not ledger_df.empty:
     holdings = 0
@@ -112,9 +120,9 @@ if not ledger_df.empty:
                 avg_cost = 0
             equity_curve.append({
                 "Time": row["Time"],
-                "Equity": 300.00 + realized_pnl
+                "Equity": SEED_CAPITAL + realized_pnl
             })
-    current_challenge_equity = 300.00 + realized_pnl
+    current_challenge_equity = SEED_CAPITAL + realized_pnl
 
 equity_df = pd.DataFrame(equity_curve)
 
@@ -229,10 +237,10 @@ elif signal in ["SELL", "SELL_LIQUIDATE"] and current_qty > 0:
         st.error(f"Sell failed: {e}")
 
 # --- 8. DASHBOARD UI ---
-st.subheader("🏆 $300 Challenge Metrics")
+st.subheader("🏆 Challenge Metrics")
 colA, colB, colC = st.columns(3)
-colA.metric("Starting Capital", "$300.00")
-colB.metric("Challenge Equity", f"${current_challenge_equity:.2f}", f"${current_challenge_equity - 300.00:.2f} PnL")
+colA.metric("Starting Capital", f"${SEED_CAPITAL:.2f}")
+colB.metric("Challenge Equity", f"${current_challenge_equity:.2f}", f"${current_challenge_equity - SEED_CAPITAL:.2f} PnL")
 colC.metric("Open Position PnL", f"${unrealized_pl:.2f}", f"{int(current_qty)} Shares")
 
 st.markdown("---")
@@ -267,7 +275,7 @@ with tab1:
 with tab2:
     fig_eq = go.Figure()
     fig_eq.add_trace(go.Scatter(x=equity_df["Time"], y=equity_df["Equity"], mode='lines+markers', name='Equity', line=dict(color='#00FF00', width=3)))
-    fig_eq.update_layout(title="Compounding Growth from $300 Seed", xaxis_title="Time", yaxis_title="Account Equity ($)", template="plotly_dark", height=500)
+    fig_eq.update_layout(title=f"Compounding Growth from ${SEED_CAPITAL:.0f} Seed", xaxis_title="Time", yaxis_title="Account Equity ($)", template="plotly_dark", height=500)
     st.plotly_chart(fig_eq, use_container_width=True)
 
 with tab3:
