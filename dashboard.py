@@ -55,6 +55,20 @@ def cooldown_remaining():
 
 def mark_order_submitted():
     st.session_state["last_order_time"] = datetime.datetime.now()
+# --- Market Hours Gate ---
+def market_is_open():
+    now_et = datetime.datetime.now(EST)
+    if now_et.weekday() >= 5:  # Saturday=5, Sunday=6
+        return False
+    market_open_time = datetime.time(9, 30, 0)
+    market_close_time = datetime.time(16, 0, 0)
+    return market_open_time <= now_et.time() <= market_close_time
+
+# --- Budget Safety Factor (prevents "insufficient buying power" errors) ---
+# Uses 95% of available budget to absorb price movement between
+# signal detection and order execution.
+BUDGET_SAFETY_FACTOR = 0.95
+</parameter>
 
 # ================================================================
 # SECTION 3 - TICKER CONFIGURATION
@@ -327,12 +341,27 @@ for symbol, config in TICKERS.items():
         buy_candidate = (symbol, signal)
 
 # ================================================================
-# SECTION 8 - ORDER EXECUTION (TRIPLE-GUARDED)
+# SECTION 8 - ORDER EXECUTION (TRIPLE-GUARDED + MARKET HOURS)
 #
+# GUARD 0: Market hours gate - no orders outside 9:30am-4pm ET
 # GUARD 1: 60-second cooldown (local session memory)
 # GUARD 2: Pending order check (open orders query)
 # GUARD 3: Strict capital budget (NEVER exceed challenge equity)
+#
+# BUDGET_SAFETY_FACTOR = 0.95 ensures price movement between
+# signal detection and order fill never trips Alpaca's buying
+# power check (fixes "insufficient buying power" error).
 # ================================================================
+
+BUDGET_SAFETY_FACTOR = 0.95
+
+def market_is_open():
+    now_et = datetime.datetime.now(EST)
+    if now_et.weekday() >= 5:
+        return False
+    market_open_time = datetime.time(9, 30, 0)
+    market_close_time = datetime.time(16, 0, 0)
+    return market_open_time <= now_et.time() <= market_close_time
 
 # GUARD 2: Check for pending orders
 try:
@@ -342,99 +371,103 @@ try:
 except Exception:
     pending_symbols = set()
 
-# GUARD 3: Block buys if we are already fully deployed
+# GUARD 3: Block buys if fully deployed
 if buy_candidate and remaining_budget <= 0:
-    st.error(f"CAPITAL LIMIT: ${deployed_cost:.2f} deployed of ${current_challenge_equity:.2f} equity. No budget for new buys.")
+    st.error(f"CAPITAL LIMIT: ${deployed_cost:.2f} deployed of ${current_challenge_equity:.2f}. No budget for new buys.")
     buy_candidate = None
 
-# Show cooldown status
-if not can_submit_order():
+# Show cooldown or market closed status
+if not market_is_open():
+    st.info("Market closed. Bot is monitoring only - no orders will be submitted.")
+elif not can_submit_order():
     st.warning(f"Order cooldown active. Next order in {int(cooldown_remaining())} seconds...")
 
 # --- SELL EXECUTION ---
-for symbol, sig_data in signals.items():
-    if sig_data["signal"] == "SELL_LIQUIDATE" and current_ticker == symbol and total_qty > 0:
-        if not can_submit_order() or symbol in pending_symbols:
-            continue
-        try:
-            sell_order = MarketOrderRequest(symbol=symbol, qty=total_qty, side=OrderSide.SELL,
-                time_in_force=TimeInForce.DAY, client_order_id=f"ACT_{uuid.uuid4().hex[:8]}")
-            trading_client.submit_order(order_data=sell_order)
-            mark_order_submitted()
-            st.success(f"Liquidated ALL {int(total_qty)} shares of {symbol} (blackout).")
-        except Exception as e:
-            st.error(f"Blackout liquidation failed: {e}")
-
-if patient_sell and current_ticker and patient_qty > 0:
-    if can_submit_order() and current_ticker not in pending_symbols:
-        try:
-            sell_order = MarketOrderRequest(symbol=current_ticker, qty=patient_qty, side=OrderSide.SELL,
-                time_in_force=TimeInForce.DAY, client_order_id=f"PAT_{uuid.uuid4().hex[:8]}")
-            trading_client.submit_order(order_data=sell_order)
-            mark_order_submitted()
-            st.success(f"PATIENT SELL: {int(patient_qty)} shares of {current_ticker}. {patient_sell_reason}")
-        except Exception as e:
-            st.error(f"Patient sell failed: {e}")
-
-if active_sell and current_ticker and active_qty > 0:
-    if can_submit_order() and current_ticker not in pending_symbols:
-        try:
-            sell_order = MarketOrderRequest(symbol=current_ticker, qty=active_qty, side=OrderSide.SELL,
-                time_in_force=TimeInForce.DAY, client_order_id=f"ACT_{uuid.uuid4().hex[:8]}")
-            trading_client.submit_order(order_data=sell_order)
-            mark_order_submitted()
-            st.success(f"ACTIVE SELL: {int(active_qty)} shares of {current_ticker}. {active_sell_reason}")
-        except Exception as e:
-            st.error(f"Active sell failed: {e}")
-
-# --- BUY EXECUTION ---
-if buy_candidate:
-    symbol, buy_type = buy_candidate
-    price = ticker_data[symbol]["current_price"]
-
-    if not can_submit_order():
-        pass
-    elif symbol in pending_symbols:
-        st.warning(f"Order pending for {symbol}. Waiting for fill...")
-    elif buy_type == "BUY":
-        half_budget = remaining_budget / 2.0
-        patient_buy_qty = int(half_budget // price) if price > 0 else 0
-        active_buy_qty = int(half_budget // price) if price > 0 else 0
-        total_buy_cost = (patient_buy_qty + active_buy_qty) * price
-        if total_buy_cost > current_challenge_equity:
-            st.error(f"BLOCKED: Cost ${total_buy_cost:.2f} exceeds equity ${current_challenge_equity:.2f}.")
-        elif patient_buy_qty > 0 and active_buy_qty > 0:
+if market_is_open():
+    for symbol, sig_data in signals.items():
+        if sig_data["signal"] == "SELL_LIQUIDATE" and current_ticker == symbol and total_qty > 0:
+            if not can_submit_order() or symbol in pending_symbols:
+                continue
             try:
-                pat_order = MarketOrderRequest(symbol=symbol, qty=patient_buy_qty, side=OrderSide.BUY,
+                sell_order = MarketOrderRequest(symbol=symbol, qty=total_qty, side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY, client_order_id=f"ACT_{uuid.uuid4().hex[:8]}")
+                trading_client.submit_order(order_data=sell_order)
+                mark_order_submitted()
+                st.success(f"Liquidated ALL {int(total_qty)} shares of {symbol} (blackout).")
+            except Exception as e:
+                st.error(f"Blackout liquidation failed: {e}")
+
+    if patient_sell and current_ticker and patient_qty > 0:
+        if can_submit_order() and current_ticker not in pending_symbols:
+            try:
+                sell_order = MarketOrderRequest(symbol=current_ticker, qty=patient_qty, side=OrderSide.SELL,
                     time_in_force=TimeInForce.DAY, client_order_id=f"PAT_{uuid.uuid4().hex[:8]}")
-                act_order = MarketOrderRequest(symbol=symbol, qty=active_buy_qty, side=OrderSide.BUY,
-                    time_in_force=TimeInForce.DAY, client_order_id=f"ACT_{uuid.uuid4().hex[:8]}")
-                trading_client.submit_order(order_data=pat_order)
-                trading_client.submit_order(order_data=act_order)
+                trading_client.submit_order(order_data=sell_order)
                 mark_order_submitted()
-                st.success(f"SPLIT BUY {symbol} ~${price:.2f}: Patient {patient_buy_qty} + Active {active_buy_qty} shares (${total_buy_cost:.2f} of ${current_challenge_equity:.2f})")
+                st.success(f"PATIENT SELL: {int(patient_qty)} shares of {current_ticker}. {patient_sell_reason}")
             except Exception as e:
-                mark_order_submitted()
-                st.error(f"Buy failed: {e}")
-        else:
-            st.warning(f"Not enough equity for {symbol} at ${price:.2f}.")
-    elif buy_type == "BUY_ACTIVE":
-        active_buy_qty = int(remaining_budget // price) if price > 0 else 0
-        new_total_cost = deployed_cost + (active_buy_qty * price)
-        if new_total_cost > current_challenge_equity:
-            st.error(f"BLOCKED: Total cost ${new_total_cost:.2f} exceeds equity ${current_challenge_equity:.2f}.")
-        elif active_buy_qty > 0:
+                st.error(f"Patient sell failed: {e}")
+
+    if active_sell and current_ticker and active_qty > 0:
+        if can_submit_order() and current_ticker not in pending_symbols:
             try:
-                order = MarketOrderRequest(symbol=symbol, qty=active_buy_qty, side=OrderSide.BUY,
+                sell_order = MarketOrderRequest(symbol=current_ticker, qty=active_qty, side=OrderSide.SELL,
                     time_in_force=TimeInForce.DAY, client_order_id=f"ACT_{uuid.uuid4().hex[:8]}")
-                trading_client.submit_order(order_data=order)
+                trading_client.submit_order(order_data=sell_order)
                 mark_order_submitted()
-                st.success(f"ACTIVE RE-ENTRY: {active_buy_qty} shares of {symbol} ~${price:.2f} (${active_buy_qty * price:.2f} of ${remaining_budget:.2f} available)")
+                st.success(f"ACTIVE SELL: {int(active_qty)} shares of {current_ticker}. {active_sell_reason}")
             except Exception as e:
-                mark_order_submitted()
-                st.error(f"Active re-entry failed: {e}")
-        else:
-            st.warning(f"Not enough remaining equity (${remaining_budget:.2f}) for {symbol} at ${price:.2f}.")
+                st.error(f"Active sell failed: {e}")
+
+    # --- BUY EXECUTION ---
+    if buy_candidate:
+        symbol, buy_type = buy_candidate
+        price = ticker_data[symbol]["current_price"]
+
+        if not can_submit_order():
+            pass
+        elif symbol in pending_symbols:
+            st.warning(f"Order pending for {symbol}. Waiting for fill...")
+        elif buy_type == "BUY":
+            half_budget = (remaining_budget * BUDGET_SAFETY_FACTOR) / 2.0
+            patient_buy_qty = int(half_budget // price) if price > 0 else 0
+            active_buy_qty = int(half_budget // price) if price > 0 else 0
+            total_buy_cost = (patient_buy_qty + active_buy_qty) * price
+            if total_buy_cost > current_challenge_equity:
+                st.error(f"BLOCKED: Cost ${total_buy_cost:.2f} exceeds equity ${current_challenge_equity:.2f}.")
+            elif patient_buy_qty > 0 and active_buy_qty > 0:
+                try:
+                    pat_order = MarketOrderRequest(symbol=symbol, qty=patient_buy_qty, side=OrderSide.BUY,
+                        time_in_force=TimeInForce.DAY, client_order_id=f"PAT_{uuid.uuid4().hex[:8]}")
+                    act_order = MarketOrderRequest(symbol=symbol, qty=active_buy_qty, side=OrderSide.BUY,
+                        time_in_force=TimeInForce.DAY, client_order_id=f"ACT_{uuid.uuid4().hex[:8]}")
+                    trading_client.submit_order(order_data=pat_order)
+                    trading_client.submit_order(order_data=act_order)
+                    mark_order_submitted()
+                    st.success(f"SPLIT BUY {symbol} ~${price:.2f}: Patient {patient_buy_qty} + Active {active_buy_qty} shares (${total_buy_cost:.2f} of ${current_challenge_equity:.2f})")
+                except Exception as e:
+                    mark_order_submitted()
+                    st.error(f"Buy failed: {e}")
+            else:
+                st.warning(f"Not enough equity for {symbol} at ${price:.2f}.")
+
+        elif buy_type == "BUY_ACTIVE":
+            active_buy_qty = int((remaining_budget * BUDGET_SAFETY_FACTOR) // price) if price > 0 else 0
+            new_total_cost = deployed_cost + (active_buy_qty * price)
+            if new_total_cost > current_challenge_equity:
+                st.error(f"BLOCKED: Total cost ${new_total_cost:.2f} exceeds equity ${current_challenge_equity:.2f}.")
+            elif active_buy_qty > 0:
+                try:
+                    order = MarketOrderRequest(symbol=symbol, qty=active_buy_qty, side=OrderSide.BUY,
+                        time_in_force=TimeInForce.DAY, client_order_id=f"ACT_{uuid.uuid4().hex[:8]}")
+                    trading_client.submit_order(order_data=order)
+                    mark_order_submitted()
+                    st.success(f"ACTIVE RE-ENTRY: {active_buy_qty} shares of {symbol} ~${price:.2f} (${active_buy_qty * price:.2f} of ${remaining_budget:.2f} available)")
+                except Exception as e:
+                    mark_order_submitted()
+                    st.error(f"Active re-entry failed: {e}")
+            else:
+                st.warning(f"Not enough remaining equity (${remaining_budget:.2f}) for {symbol} at ${price:.2f}.")
 # ================================================================
 # SECTION 9 - PORTFOLIO OVERVIEW
 # ================================================================
