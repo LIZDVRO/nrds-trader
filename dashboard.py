@@ -68,7 +68,6 @@ def market_is_open():
 # Uses 95% of available budget to absorb price movement between
 # signal detection and order execution.
 BUDGET_SAFETY_FACTOR = 0.95
-</parameter>
 
 # ================================================================
 # SECTION 3 - TICKER CONFIGURATION
